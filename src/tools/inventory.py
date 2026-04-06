@@ -14,19 +14,3 @@ def check_stock(item_name: str) -> Dict[str, Any]:
     result = {"item": item_name, "quantity": quantity, "available": quantity > 0}
     logger.log_event("TOOL_EXECUTED", {"tool": "check_stock", "result": result})
     return result
-
-
-CHECK_STOCK_SCHEMA = {
-    "name": "check_stock",
-    "description": "Check the available quantity of an item in inventory.",
-    "arguments": {
-        "type": "object",
-        "properties": {
-            "item_name": {
-                "type": "string",
-                "description": "Name of the item to check (e.g., 'iPhone')",
-            }
-        },
-        "required": ["item_name"],
-    },
-}

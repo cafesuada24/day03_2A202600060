@@ -17,20 +17,3 @@ def calc_shipping(weight_kg: float, destination: str) -> Dict[str, Any]:
     }
     logger.log_event("TOOL_EXECUTED", {"tool": "calc_shipping", "result": result})
     return result
-
-
-CALC_SHIPPING_SCHEMA = {
-    "name": "calc_shipping",
-    "description": "Calculate shipping cost based on package weight and destination.",
-    "arguments": {
-        "type": "object",
-        "properties": {
-            "weight_kg": {"type": "number", "description": "Weight in kilograms"},
-            "destination": {
-                "type": "string",
-                "description": "Destination city/country",
-            },
-        },
-        "required": ["weight_kg", "destination"],
-    },
-}

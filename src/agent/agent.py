@@ -1,123 +1,117 @@
-import os
+import json
 import re
-from typing import List, Dict, Any
+from pathlib import Path
+from typing import Any, Dict, List
+
 from src.core.llm_provider import LLMProvider
 from src.telemetry.logger import logger
-from pathlib import Path
 
 
 class ReActAgent:
-    """
-    SKELETON: A ReAct-style Agent that follows the Thought-Action-Observation loop.
-    Students should implement the core loop logic and tool execution.
-    """
-
     def __init__(
-        self,
-        llm: LLMProvider,
-        tools: List[Dict[str, Any]],
-        max_steps: int = 5,
+        self, llm: LLMProvider, tools: List[Dict[str, Any]], max_steps: int = 5
     ):
         self.llm = llm
         self.tools = tools
         self.max_steps = max_steps
-        self.history = []
+        self.tool_map = {t["name"]: t["func"] for t in self.tools}
 
     def get_system_prompt(self, user_input: str) -> str:
         """
-        TODO: Implement the system prompt that instructs the agent to follow ReAct.
-        Should include:
-        1.  Available tools and their descriptions.
-        2.  Format instructions: Thought, Action, Observation.
+        Tạo prompt hệ thống bằng cách nạp từ file và format các biến.
+        Hỗ trợ cả v1 và v2 để tránh lỗi KeyError.
         """
-        tool_descriptions = "\n".join(
+        descriptions = "\n".join(
             [f"- {t['name']}: {t['description']}" for t in self.tools]
         )
-        tools_list = [t["name"] for t in self.tools]
+        names = ", ".join([t["name"] for t in self.tools])
 
-        return (
-            Path("src/prompts/ReAct.v2.txt")
-            .read_text()
-            .format(
-                tools=tool_descriptions,
-                # tools_list=tools_list,
-                user_input=user_input,
-            )
+        prompt_path = Path("src/prompts/ReAct.v2.txt")
+        if not prompt_path.exists():
+            prompt_path = Path("src/prompts/ReAct.v1.txt")
+
+        prompt_text = prompt_path.read_text()
+
+        return prompt_text.format(
+            tools=descriptions,
+            tool_descriptions=descriptions,  # Cho các template dùng tên khác
+            tool_names=names,
+            user_input=user_input,
         )
 
     def run(self, user_input: str) -> str:
-        """
-        TODO: Implement the ReAct loop logic.
-        1. Generate Thought + Action.
-        2. Parse Action and execute Tool.
-        3. Append Observation to prompt and repeat until Final Answer.
-        """
-        logger.log_event(
-            "AGENT_START", {"input": user_input, "model": self.llm.model_name}
-        )
-
         current_prompt = self.get_system_prompt(user_input)
-        print(current_prompt)
         steps = 0
-
-        total_tokens: int | None = None
-        latency_ms = 0
-        final_answer: str = (
-            "Agent failed to solve the problem within the iteration limit."
-        )
 
         while steps < self.max_steps:
             steps += 1
-
             logger.info(f"--- Iteration {steps} ---")
+
+            # Gọi LLM
             response = self.llm.generate(current_prompt)
-            llm_response = response["content"]
+            llm_output = response["content"]
 
-            if response["usage"]["total_tokens"]:
-                if total_tokens is None:
-                    total_tokens = 0
-                total_tokens += response["usage"]["total_tokens"]
+            # Lưu vào ngữ cảnh
+            current_prompt += f"\n{llm_output}\n"
 
-            latency_ms += response["latency_ms"]
+            # Kiểm tra nếu đã có câu trả lời cuối cùng
+            if "Final Answer:" in llm_output:
+                return llm_output.split("Final Answer:")[-1].strip()
 
-            current_prompt += f"Observation: {llm_response}\n"
-            logger.info(llm_response)
+            # Parse Action và Action Input
+            action_match = re.search(r"Action:\s*\[?(\w+)\]?", llm_output)
+            action_input_match = re.search(r"Action Input:\s*(.*)", llm_output)
 
-            if "Final Answer:" in llm_response:
-                final_answer = llm_response.split("Final Answer:")[-1].strip()
-                break
+            if action_match and action_input_match:
+                tool_name = action_match.group(1).strip()
+                tool_input = action_input_match.group(1).strip()
 
-            action_match = re.search(r"Action:\s*(.*?)(?:\n|$)", llm_response)
-            action_input_match = re.search(
-                r"Action Input:\s*(.*?)(?:\n|$)", llm_response
-            )
+                # Thực hiện tool
+                observation = self._execute_tool(tool_name, tool_input)
 
-            if not action_match or not action_input_match:
-                error_msg = "Observation: Error - Could not parse Action and Action Input. Please use the strict format."
-                current_prompt += error_msg + "\n"
-                logger.error(error_msg)
-                continue
+                # Cập nhật kết quả quan sát vào prompt
+                obs_text = f"Observation: {observation}"
+                current_prompt += f"{obs_text}\n"
+                logger.info(obs_text)
+            else:
+                # Nhắc nhở model nếu nó quên format
+                error_prompt = "Observation: Error - Invalid format. Use Thought, Action, Action Input, Observation."
+                current_prompt += f"{error_prompt}\n"
+                logger.error("Format error from LLM")
 
-            action = action_match.group(1).strip()
-            action_input = action_input_match.group(1).strip()
+        return "Agent reached max steps without a final answer."
 
-            observation = self._execute_tool(action, action_input)
+    def _execute_tool(self, tool_name: str, args_str: str) -> str:
+        if tool_name not in self.tool_map:
+            return f"Error: Tool '{tool_name}' not found."
 
-            current_prompt += observation + "\n"
-            logger.info(observation + "\n")
+        func = self.tool_map[tool_name]
+        try:
+            try:
+                clean_args = args_str.strip().replace("'", '"')
+                params = json.loads(clean_args)
+                if isinstance(params, dict):
+                    return json.dumps(func(**params))
+            except:
+                pass
 
-        logger.log_event(
-            "AGENT_END",
-            {"steps": steps, "latency_ms": latency_ms, "total_tokens": total_tokens},
-        )
-        return final_answer
+            if "," in args_str:
+                args_list = [
+                    a.strip().strip('"').strip("'") for a in args_str.split(",")
+                ]
+                processed_args = []
+                for x in args_list:
+                    try:
+                        processed_args.append(float(x) if "." in x else int(x))
+                    except:
+                        processed_args.append(x)
 
-    def _execute_tool(self, tool_name: str, args: str) -> str:
-        """
-        Helper method to execute tools by name.
-        """
+                return json.dumps(
+                    func(*processed_args)
+                )  # Unpack list thành các tham số rời
 
-        for tool in self.tools:
-            if tool["name"] == tool_name:
-                return tool["func"](args)
-        return f"Tool {tool_name} not found."
+            clean_val = args_str.strip().strip('"').strip("'")
+            return json.dumps(func(clean_val))
+
+        except Exception as e:
+            return f"Execution Error: {str(e)}"

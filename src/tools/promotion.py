@@ -18,19 +18,3 @@ def get_discount(coupon_code: str) -> Dict[str, Any]:
     }
     logger.log_event("TOOL_EXECUTED", {"tool": "get_discount", "result": result})
     return result
-
-
-GET_DISCOUNT_SCHEMA = {
-    "name": "get_discount",
-    "description": "Get the discount percentage for a coupon code.",
-    "arguments": {
-        "type": "object",
-        "properties": {
-            "coupon_code": {
-                "type": "string",
-                "description": "The coupon code to validate",
-            }
-        },
-        "required": ["coupon_code"],
-    },
-}
