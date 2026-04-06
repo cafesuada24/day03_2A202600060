@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import sys
 
@@ -6,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.agent import ReActAgent
-from src.tools.registry import get_tool_descriptions
+from src.tools.tools import get_tool_descriptions
 
 
 def get_provider():
